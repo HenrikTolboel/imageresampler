@@ -14,6 +14,7 @@
 #include <float.h>
 #include <assert.h>
 #include <string.h>
+#include <stdio.h>
 #include "resampler.h"
 
 #define resampler_assert assert
@@ -38,7 +39,9 @@ static inline int resampler_range_check(int v, int h) { (void)h; resampler_asser
 
 #define RESAMPLER_DEBUG 0
 
+#ifndef M_PI
 #define M_PI 3.14159265358979323846
+#endif
 
 // Float to int cast with truncation.
 static inline int cast_to_int(Resample_Real i)
@@ -791,12 +794,10 @@ void Resampler::resample_y(Sample* Pdst)
       * buffer -- the contributor must always be found!
       */
 
-      for (j = 0; j < MAX_SCAN_BUF_SIZE; j++)
-         if (m_Pscan_buf->scan_buf_y[j] == Pclist->p[i].pixel)
-            break;
+      j = m_Pscan_buf->FindYIndexForValue(Pclist->p[i].pixel);
 
-      resampler_assert(j < MAX_SCAN_BUF_SIZE);
-
+      resampler_assert(j >= 0);
+       
       Psrc = m_Pscan_buf->scan_buf_l[j];
 
       if (!i)
@@ -814,7 +815,7 @@ void Resampler::resample_y(Sample* Pdst)
       if (--m_Psrc_y_count[resampler_range_check(Pclist->p[i].pixel, m_resample_src_y)] == 0)
       {
          m_Psrc_y_flag[resampler_range_check(Pclist->p[i].pixel, m_resample_src_y)] = FALSE;
-         m_Pscan_buf->scan_buf_y[j] = -1;
+         m_Pscan_buf->SetVacantY(j);
       }
    }
 
@@ -852,15 +853,11 @@ bool Resampler::put_line(const Sample* Psrc)
       return true;
    }
 
-   /* Find an empty slot in the scanline buffer. (FIXME: Perf. is terrible here with extreme scaling ratios.) */
-
-   for (i = 0; i < MAX_SCAN_BUF_SIZE; i++)
-      if (m_Pscan_buf->scan_buf_y[i] == -1)
-         break;
-
+   /* Find an empty slot in the scanline buffer. */
+   i = m_Pscan_buf->FindVacantY();
+   
    /* If the buffer is full, exit with an error. */
-
-   if (i == MAX_SCAN_BUF_SIZE)
+   if (i < 0)
    {
       m_status = STATUS_SCAN_BUFFER_FULL;
       return false;
@@ -971,10 +968,7 @@ Resampler::~Resampler()
 
    if (m_Pscan_buf)
    {
-      for (i = 0; i < MAX_SCAN_BUF_SIZE; i++)
-         free(m_Pscan_buf->scan_buf_l[i]);
-
-      free(m_Pscan_buf);
+      delete m_Pscan_buf;
       m_Pscan_buf = NULL;
    }
 }
@@ -999,13 +993,7 @@ void Resampler::restart()
          m_Psrc_y_count[resampler_range_check(m_Pclist_y[i].p[j].pixel, m_resample_src_y)]++;
    }
 
-   for (i = 0; i < MAX_SCAN_BUF_SIZE; i++)
-   {
-      m_Pscan_buf->scan_buf_y[i] = -1;
-
-      free(m_Pscan_buf->scan_buf_l[i]);
-      m_Pscan_buf->scan_buf_l[i] = NULL;
-   }
+   m_Pscan_buf->restart();
 }
 
 Resampler::Resampler(int src_x, int src_y,
@@ -1131,16 +1119,11 @@ Resampler::Resampler(int src_x, int src_y,
       for (j = 0; j < m_Pclist_y[i].n; j++)
          m_Psrc_y_count[resampler_range_check(m_Pclist_y[i].p[j].pixel, m_resample_src_y)]++;
 
-   if ((m_Pscan_buf = (Scan_Buf*)malloc(sizeof(Scan_Buf))) == NULL)
+   m_Pscan_buf = new Resampler::Scan_Buf();
+   if (!m_Pscan_buf)
    {
       m_status = STATUS_OUT_OF_MEMORY;
       return;
-   }
-
-   for (i = 0; i < MAX_SCAN_BUF_SIZE; i++)
-   {
-      m_Pscan_buf->scan_buf_y[i] = -1;
-      m_Pscan_buf->scan_buf_l[i] = NULL;
    }
 
    m_cur_src_y = m_cur_dst_y = 0;
@@ -1216,5 +1199,135 @@ char* Resampler::get_filter_name(int filter_num)
       return NULL;
    else
       return g_filters[filter_num].name;
+}
+
+// ################ Class: Scan_Buf #####################
+Resampler::Scan_Buf::Scan_Buf()
+{
+   mMaxScanBufSize = MAX_SCAN_BUF_SIZE;
+
+   for (int i = 0; i < mMaxScanBufSize; i++)
+   {
+      scan_buf_y[i] = -1;
+      scan_buf_l[i] = NULL;
+   }
+   mNoBufInUse = 0;
+   mMaxNoBufInUse = 0;
+   mVacant = 0;
+   mLastVacant = -1;
+}
+
+Resampler::Scan_Buf::~Scan_Buf()
+{
+   int end = min(mVacant, mMaxScanBufSize);
+   for (int i = 0; i < end; i++)
+   {
+      if (scan_buf_l[i])
+         free(scan_buf_l[i]);
+   }
+}
+
+inline int Resampler::Scan_Buf::MaxScanBufSize()
+{
+   return mMaxScanBufSize;
+}
+
+inline int Resampler::Scan_Buf::MaxNoBufInUse()
+{
+   return mMaxNoBufInUse;
+}
+
+int Resampler::MaxNoBufInUse()
+{
+   if (m_Pscan_buf)
+      return m_Pscan_buf->MaxNoBufInUse();
+   else
+      return 0;
+}
+
+void Resampler::Scan_Buf::restart()
+{
+   int end = min(mVacant, mMaxScanBufSize);
+   for (int i = 0; i < end; i++)
+   {
+      scan_buf_y[i] = -1;
+
+      if (scan_buf_l[i])
+         free(scan_buf_l[i]);
+      scan_buf_l[i] = NULL;
+   }
+   mNoBufInUse = 0;
+   mVacant = 0;
+   mLastVacant = -1;
+}
+
+int Resampler::Scan_Buf::FindVacantY()
+{
+   int            Res;
+   if (mLastVacant != -1)
+   {
+      Res = mVacants[mLastVacant--];
+   }
+   else if (mVacant < mMaxScanBufSize)
+   {
+      Res = mVacant++;
+   }
+   else
+   {
+      Res = -1;
+      for (int i = 0; i < mMaxScanBufSize; i++)
+      {
+         if (scan_buf_y[i] == -1)
+         {
+            Res = i;
+            break;
+         }
+      }
+   }
+   if (Res != -1)
+   {
+      mNoBufInUse++;
+      if (mNoBufInUse > mMaxNoBufInUse)
+         mMaxNoBufInUse = mNoBufInUse;
+   }
+   return Res;
+}
+
+void Resampler::Scan_Buf::SetVacantY(int i)
+{
+   scan_buf_y[i] = -1;
+   mVacants[++mLastVacant] = i;
+   mNoBufInUse--;
+}
+
+int Resampler::Scan_Buf::FindYIndexForValue(int Value)
+{
+   int            Res = -1;
+
+   int end = min(mVacant, mMaxScanBufSize);
+   for (int j = 0; j < end; j++)
+   {
+      if (scan_buf_y[j] == Value)
+      {
+         Res = j;
+         break;
+      }
+   }
+
+   return Res;
+}
+
+char *Resampler::Scan_Buf::DebugState()
+{
+   sprintf(mDebugState, "MaxNoBufInUse=%d, NoBufInUse=%d, Vacant=%d", mMaxNoBufInUse, mNoBufInUse, mVacant);
+   return mDebugState;
+}
+
+char *Resampler::DebugState()
+{
+   if (m_Pscan_buf)
+      return m_Pscan_buf->DebugState();
+   else
+      return NULL;
 }
 

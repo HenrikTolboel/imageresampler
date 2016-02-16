@@ -1,0 +1,2 @@
+g++ stb_image.c resampler.cpp test.cpp -o imageresampler
+

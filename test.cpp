@@ -27,7 +27,7 @@ int main(int arg_c, char** arg_v)
    const int dst_width = atoi(arg_v[3]);
    const int dst_height = atoi(arg_v[4]);
    
-   if ((std::min(dst_width, dst_height) < 1) || (std::max(dst_width, dst_height) > RESAMPLER_MAX_DIMENSION))
+   if (std::min(dst_width, dst_height) < 1)
    {
       printf("Invalid output width/height!\n");
       return EXIT_FAILURE;
@@ -47,9 +47,9 @@ int main(int arg_c, char** arg_v)
    
    const int max_components = 4;   
    
-   if ((std::max(src_width, src_height) > RESAMPLER_MAX_DIMENSION) || (n > max_components))
+   if (n > max_components)
    {
-      printf("Image is too large!\n");
+      printf("Image has too many components!\n");
       return EXIT_FAILURE;
    }
       
@@ -173,7 +173,10 @@ int main(int arg_c, char** arg_v)
 
    // Delete the resamplers.
    for (int i = 0; i < n; i++)
+   {
+      printf("DebugState[%d]=%s\n", i, resamplers[i]->DebugState());
       delete resamplers[i];
+   }
    
    return EXIT_SUCCESS;
 }

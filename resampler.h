@@ -83,6 +83,10 @@ public:
    // Filter accessors.
    static int get_filter_num();
    static char* get_filter_name(int filter_num);
+
+   //Get information from Scan_Buf
+   int            MaxNoBufInUse();
+   char          *DebugState();
    
 private:
    Resampler();
@@ -116,13 +120,54 @@ private:
    int* m_Psrc_y_count;
    unsigned char* m_Psrc_y_flag;
 
-   // The maximum number of scanlines that can be buffered at one time.
-   enum { MAX_SCAN_BUF_SIZE = RESAMPLER_MAX_DIMENSION };
-   
-   struct Scan_Buf
+   class Scan_Buf
    {
-      int scan_buf_y[MAX_SCAN_BUF_SIZE];
-      Sample* scan_buf_l[MAX_SCAN_BUF_SIZE];
+       // The maximum number of scanlines that can be buffered at one time.
+       enum 
+       { 
+           // This has nothing to do with Image size - images to be scaled can
+           // easily be larger in dimensions than this
+	   MAX_SCAN_BUF_SIZE = RESAMPLER_MAX_DIMENSION 
+       };
+   
+    public:
+                     Scan_Buf();
+                    ~Scan_Buf();
+
+      void           restart();
+
+      int            MaxScanBufSize();
+      int            MaxNoBufInUse();
+      char          *DebugState();
+
+      int            FindVacantY();
+      void           SetVacantY(int i);
+
+      int            FindYIndexForValue(int Value);
+
+      int            scan_buf_y[MAX_SCAN_BUF_SIZE];
+      Sample        *scan_buf_l[MAX_SCAN_BUF_SIZE];
+      
+
+    private:
+      //The maximum number of scanlines that can be buffered at one time
+      int            mMaxScanBufSize;
+
+      //The current number of scanlines that are currently in use
+      int            mNoBufInUse;
+      //The maximum number of scanline buffers that has been in use at
+      //same time
+      int            mMaxNoBufInUse;
+
+      //All buffers with index less than mVacant has at some time been in use
+      int            mVacant;
+
+      //Simple stack with vacant indexes
+      int            mLastVacant;
+      int            mVacants[MAX_SCAN_BUF_SIZE];
+
+      //fixed string that is used to write debug in
+      char           mDebugState[200];
    };
 
    Scan_Buf* m_Pscan_buf;
